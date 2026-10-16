@@ -1,0 +1,102 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>London Trainer</title><link rel="manifest" href="manifest.json"><meta name="theme-color" content="#1b1f24">
+<link rel="apple-touch-icon" href="icon-180.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#1b1f24;color:#eee;font:18px -apple-system,system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;padding:8px}
+h1{font-size:22px;margin:6px 0}
+.tabs,.btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:6px 0}
+button,select{font-size:17px;padding:10px 12px;border-radius:10px;border:0;background:#2f3640;color:#eee}
+button.on{background:#3a7d44}
+#board{width:min(96vw,520px);height:min(96vw,520px);display:grid;grid-template-columns:repeat(8,1fr);border-radius:6px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+.sq{position:relative;display:flex;align-items:center;justify-content:center}
+.l{background:#e9dcc0}.d{background:#a8875f}
+.sq img{width:92%;height:92%;pointer-events:none}
+.sq.hl::after{content:"";position:absolute;inset:0;background:rgba(40,200,70,.55)}
+.sq.sel::after{content:"";position:absolute;inset:0;background:rgba(255,220,0,.5)}
+.sq.last::before{content:"";position:absolute;inset:0;background:rgba(80,160,255,.3)}
+.sq.bad::after{content:"";position:absolute;inset:0;background:rgba(230,40,40,.6)}
+.coord{position:absolute;left:2px;bottom:0;font-size:11px;color:#0007}
+#board.shake{animation:sh .4s}@keyframes sh{25%{transform:translateX(-8px)}50%{transform:translateX(8px)}75%{transform:translateX(-5px)}}
+#info{width:min(96vw,520px);min-height:96px;background:#252b33;border-radius:10px;padding:10px 12px;margin:6px 0;line-height:1.35}
+#info b{color:#7fd38a}#stats{font-size:15px;color:#aaa}
+#drag{position:fixed;pointer-events:none;width:60px;height:60px;display:none;z-index:9}
+</style></head><body>
+<h1>♙ London System Trainer</h1>
+<div class="tabs"><button id="tLearn" class="on">Learn</button><button id="tPractice">Practice</button><button id="tProblems">Problems</button></div>
+<div class="tabs"><select id="lineSel"></select><button id="rand">Random line</button></div>
+<div id="board"></div>
+<div id="info"></div>
+<div class="btns"><button id="restart">↺ Restart</button><button id="back">← Back</button><button id="hint">💡 Hint</button><button id="expl" class="on">Explanations: On</button><button id="next" style="display:none">Next ▶</button></div>
+<div id="stats"></div><img id="drag">
+<script src="chess.js"></script><script src="lines.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let mode='learn',lineIdx=0,probIdx=0,game,ply=0,sel=null,hintOn=false,showExpl=true,busy=false,lastMove=null,missed=false,timer=null;
+let S=JSON.parse(localStorage.getItem('lt')||'{}');S.w=S.w||{};S.correct=S.correct||0;S.streak=S.streak||0;S.best=S.best||0;S.done=S.done||{};
+const save=()=>localStorage.setItem('lt',JSON.stringify(S));
+const files='abcdefgh';
+const B=$('board');const sqs={};
+for(let r=8;r>=1;r--)for(let f=0;f<8;f++){const n=files[f]+r,d=document.createElement('div');d.className='sq '+((f+r)%2?'d':'l');d.dataset.sq=n;
+ if(f==0){const c=document.createElement('span');c.className='coord';c.textContent=r;c.style.bottom='auto';c.style.top='0';d.appendChild(c)}
+ if(r==1){const c=document.createElement('span');c.className='coord';c.textContent=files[f];c.style.left='auto';c.style.right='2px';d.appendChild(c)}
+ B.appendChild(d);sqs[n]=d}
+LINES.forEach((l,i)=>{const o=document.createElement('option');o.value='l'+i;o.textContent=l.name;$('lineSel').appendChild(o)});
+function fillSel(){const s=$('lineSel');s.innerHTML='';const list=mode=='problems'?PROBLEMS:LINES;list.forEach((l,i)=>{const o=document.createElement('option');o.value=i;o.textContent=(i+1)+'. '+l.name;s.appendChild(o)});s.value=mode=='problems'?probIdx:lineIdx;$('rand').textContent=mode=='problems'?'Random problem':'Random line'}
+function render(){const b=game.board();for(let r=0;r<8;r++)for(let f=0;f<8;f++){const n=files[f]+(8-r),d=sqs[n],p=b[r][f];let img=d.querySelector('img');
+ if(p){if(!img){img=document.createElement('img');d.appendChild(img)}const src='p/'+p.color+p.type.toUpperCase()+'.svg';if(img.getAttribute('src')!=src)img.setAttribute('src',src)}else if(img)img.remove();
+ d.classList.remove('hl','sel','last','bad')}
+ if(lastMove){sqs[lastMove.from].classList.add('last');sqs[lastMove.to].classList.add('last')}
+ if(sel)sqs[sel].classList.add('sel');
+ const t=target();if(t&&(mode=='learn'||hintOn)){sqs[t.from].classList.add('hl');sqs[t.to].classList.add('hl')}
+ $('stats').textContent=`Correct: ${S.correct} · Streak: ${S.streak} · Best: ${S.best}`;}
+function curMoves(){return mode=='problems'?null:LINES[lineIdx].moves}
+function target(){ // expected white move {from,to,san}
+ if(busy||game.turn()!='w')return null;let san;
+ if(mode=='problems'){if(ply>0)return null;san=PROBLEMS[probIdx].ok[0]}else{const m=curMoves();if(ply>=m.length)return null;san=m[ply][0]}
+ const g=new Chess(game.fen());return g.move(san)}
+function info(h){$('info').innerHTML=h}
+function startLine(i){clearTimeout(timer);if(i!=null){mode=='problems'?probIdx=i:lineIdx=i}game=new Chess();ply=0;sel=null;hintOn=false;lastMove=null;missed=false;busy=false;$('next').style.display='none';
+ if(mode=='problems'){const p=PROBLEMS[probIdx];p.setup.forEach(s=>lastMove=game.move(s));info(`<b>Problem ${probIdx+1}: ${p.name}</b><br>White to move. Find the best move!`)}
+ else info(`<b>${LINES[lineIdx].name}</b><br>${mode=='learn'?'Play the green move. Tap the piece, then tap the square (or drag).':'Find White\'s move. Stuck? Tap Hint.'}`);
+ $('lineSel').value=mode=='problems'?probIdx:lineIdx;render()}
+function weightedRandom(){const w=LINES.map(l=>S.w[l.id]||1);let t=w.reduce((a,b)=>a+b),r=Math.random()*t;for(let i=0;i<w.length;i++){r-=w[i];if(r<=0)return i}return 0}
+function wrong(from,to){S.streak=0;save();missed=true;B.classList.remove('shake');void B.offsetWidth;B.classList.add('shake');[from,to].forEach(s=>s&&sqs[s].classList.add('bad'));
+ setTimeout(render,500);info((mode=='problems'?'':'')+'Not quite — try again! Tap <b>💡 Hint</b> if you\'re stuck.')}
+function tryMove(from,to){if(busy||game.turn()!='w')return;
+ const g=new Chess(game.fen());const mv=g.move({from,to,promotion:'q'});if(!mv){sel=null;render();return}
+ if(mode=='problems'){if(ply>0)return;const p=PROBLEMS[probIdx];if(p.ok.includes(mv.san)){lastMove=game.move(mv.san);ply=1;sel=null;if(!missed){S.correct++;S.streak++;S.best=Math.max(S.best,S.streak)}save();render();info(`✅ <b>${mv.san}</b> — ${p.why}`);$('next').style.display=''}else{sel=null;wrong(from,to)}return}
+ const m=curMoves(),exp=m[ply][0];
+ if(mv.san!==exp){if(mode=='learn'){sel=null;render();info(`In this line we play <b>${exp}</b> (the green squares). ${showExpl?m[ply][1]:''}`);B.classList.remove('shake');void B.offsetWidth;B.classList.add('shake');return}sel=null;wrong(from,to);return}
+ lastMove=game.move(exp);sel=null;hintOn=false;const note=m[ply][1];ply++;
+ if(mode=='practice'){S.correct++;S.streak++;S.best=Math.max(S.best,S.streak);save()}
+ let h=`✅ <b>${exp}</b>${showExpl?' — '+note:''}`;info(h);render();
+ if(ply<m.length){busy=true;timer=setTimeout(()=>{busy=false;const [bs,bn]=m[ply];lastMove=game.move(bs);ply++;info(h+`<br>Black: <b>${bs}</b>${showExpl?' — '+bn:''}`);render();endCheck()},800)}else endCheck()}
+function endCheck(){const m=curMoves();if(ply>=m.length){const id=LINES[lineIdx].id;
+ if(mode=='practice'){S.w[id]=missed?Math.min((S.w[id]||1)*2,8):Math.max((S.w[id]||1)/2,0.5);S.done[id]=(S.done[id]||0)+1;save()}
+ info($('info').innerHTML+`<br><br>🎉 <b>Line complete!</b> ${mode=='practice'?(missed?'You\'ll see this line more often.':'Perfect run!'):'Now try it in Practice mode.'}`);$('next').style.display=''}}
+function back(){clearTimeout(timer);busy=false;if(mode=='problems'){startLine();return}
+ // undo to previous White turn
+ let n=game.turn()=='w'?2:1;if(ply<2)return startLine();for(let i=0;i<n&&ply>0;i++){game.undo();ply--}const h=game.history({verbose:true});lastMove=h[h.length-1]||null;sel=null;hintOn=false;$('next').style.display='none';info('Went back one move. Your turn.');render()}
+// input: tap & drag
+let drag=null;const dimg=$('drag');
+function sqAt(x,y){const e=document.elementFromPoint(x,y);const s=e&&e.closest&&e.closest('.sq');return s?s.dataset.sq:null}
+B.addEventListener('pointerdown',e=>{const s=sqAt(e.clientX,e.clientY);if(!s)return;e.preventDefault();const p=game.get(s);
+ if(sel&&sel!==s&&!(p&&p.color=='w')){tryMove(sel,s);return}
+ if(p&&p.color=='w'&&game.turn()=='w'&&!busy){sel=s;render();drag={from:s,moved:false,x:e.clientX,y:e.clientY};dimg.src=sqs[s].querySelector('img').src;const w=sqs[s].offsetWidth;dimg.style.width=dimg.style.height=w+'px';}
+ else{sel=null;render()}});
+window.addEventListener('pointermove',e=>{if(!drag)return;if(!drag.moved&&Math.hypot(e.clientX-drag.x,e.clientY-drag.y)<8)return;drag.moved=true;const w=dimg.offsetWidth||60;dimg.style.display='block';dimg.style.left=(e.clientX-w/2)+'px';dimg.style.top=(e.clientY-w/2)+'px';sqs[drag.from].querySelector('img')&&(sqs[drag.from].querySelector('img').style.opacity=.3)});
+window.addEventListener('pointerup',e=>{if(!drag)return;const d=drag;drag=null;dimg.style.display='none';const im=sqs[d.from].querySelector('img');if(im)im.style.opacity=1;
+ if(d.moved){const t=sqAt(e.clientX,e.clientY);if(t&&t!==d.from)tryMove(d.from,t);else render()}});
+function setMode(m){mode=m;['Learn','Practice','Problems'].forEach(x=>$('t'+x).classList.toggle('on',x.toLowerCase()==m));$('hint').style.display=m=='learn'?'none':'';fillSel();startLine(m=='practice'?weightedRandom():null)}
+$('tLearn').onclick=()=>setMode('learn');$('tPractice').onclick=()=>setMode('practice');$('tProblems').onclick=()=>setMode('problems');
+$('lineSel').onchange=e=>startLine(+e.target.value);
+$('rand').onclick=()=>startLine(mode=='problems'?Math.floor(Math.random()*PROBLEMS.length):mode=='practice'?weightedRandom():Math.floor(Math.random()*LINES.length));
+$('restart').onclick=()=>startLine();$('back').onclick=back;
+$('hint').onclick=()=>{if(target()){hintOn=true;missed=true;S.streak=0;save();render();info('Move the piece on the green square to the other green square.')}};
+$('expl').onclick=()=>{showExpl=!showExpl;$('expl').textContent='Explanations: '+(showExpl?'On':'Off');$('expl').classList.toggle('on',showExpl)};
+$('next').onclick=()=>{if(mode=='problems')startLine((probIdx+1)%PROBLEMS.length);else startLine(mode=='practice'?weightedRandom():(lineIdx+1)%LINES.length)};
+setMode('learn');
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
+</script></body></html>
